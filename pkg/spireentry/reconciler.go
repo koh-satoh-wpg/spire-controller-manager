@@ -50,6 +50,8 @@ type ReconcilerConfig struct {
 	// GCInterval how long to sit idle (i.e. untriggered) before doing
 	// another reconcile.
 	GCInterval time.Duration
+
+	SkipOtherTrustDomain bool
 }
 
 func Reconciler(config ReconcilerConfig) reconciler.Reconciler {
@@ -183,10 +185,26 @@ func (r *entryReconciler) listEntries(ctx context.Context) ([]spireapi.Entry, er
 }
 
 func (r *entryReconciler) listClusterStaticEntries(ctx context.Context) ([]*ClusterStaticEntry, error) {
-	clusterStaticEntries, err := k8sapi.ListClusterStaticEntries(ctx, r.config.K8sClient)
+	rawClusterStaticEntries, err := k8sapi.ListClusterStaticEntries(ctx, r.config.K8sClient)
 	if err != nil {
 		return nil, err
 	}
+	var clusterStaticEntries []spirev1alpha1.ClusterStaticEntry
+	if !r.config.SkipOtherTrustDomain {
+		clusterStaticEntries = rawClusterStaticEntries
+	} else {
+		// Filter out clusterStaticEntries for other trust domains
+		for _, clusterStaticEntry := range rawClusterStaticEntries {
+			spiffeid, err := spiffeid.FromString(clusterStaticEntry.Spec.SPIFFEID)
+			if err != nil {
+				return nil, err
+			}
+			if spiffeid.MemberOf(r.config.TrustDomain) {
+				clusterStaticEntries = append(clusterStaticEntries, clusterStaticEntry)
+			}
+		}
+	}
+
 	out := make([]*ClusterStaticEntry, 0, len(clusterStaticEntries))
 	for _, clusterStaticEntry := range clusterStaticEntries {
 		out = append(out, &ClusterStaticEntry{
